@@ -5,9 +5,12 @@ Dependencies (run opener, embedder factory, schema inspector) are injected; `mai
 """
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import v11
+from dp_lex_embed.embeddings import EmbeddingRejected, EmbeddingUnavailable
+from dp_lex_embed.errors import DbConnectError
 from dp_lex_embed.identifiers import InvalidIdentifierError, check_ident, parse_table
 from dp_lex_embed.model import DEFAULT_BATCH_SIZE, DEFAULT_MODEL, EmbedOptions, EmbedResult
 from dp_lex_embed.service import EmbedService
@@ -74,6 +77,10 @@ def config_error(message: str) -> ActionError:
 
 
 MAX_BATCH_SIZE = 64
+DB_RETRY_AFTER_SEC = 30
+RUN_RETRY_AFTER_SEC = 60
+VECTOR_TYPE = "vector(1024)"
+log = logging.getLogger(__name__)
 
 
 def metrics_for(table: str, *, pending: int = 0, embedded: int = 0, skipped: int = 0, tokens: int = 0) -> dict[str, float]:
@@ -93,9 +100,41 @@ class Actions:
     def check(self, params: Mapping[str, Any]) -> dict[str, Any]:
         if params.get("dryRun") is True:  # conformance at registration: no database, no Jina
             return {"ok": True}
+        options = parse_options({**params, "tokenBudget": params.get("tokenBudget", 0)})
+        conn_string = _required_text(params, "connString")
+        schema, table = _table_of(params)
+        try:
+            found = self._inspector.columns(conn_string, schema, table)
+        except DbConnectError as ex:
+            code = v11.ProcErrorCode.CONFIG_ERROR if ex.is_login_rejected else v11.ProcErrorCode.TRANSIENT_ERROR
+            raise ActionError(code, _scrub(str(ex), [conn_string]), None if ex.is_login_rejected else DB_RETRY_AFTER_SEC) from None
+        if not found:
+            raise config_error(f"table {options.table} does not exist")
+        missing = [c for c in (options.key_column, *options.text_columns, options.vector_column) if c not in found]
+        if missing:
+            raise config_error(f"table {options.table} lacks column(s) {', '.join(missing)}")
+        if found[options.vector_column] != VECTOR_TYPE:
+            raise config_error(f"column {options.vector_column} is {found[options.vector_column]}, expected {VECTOR_TYPE}")
         return {"ok": True}
 
     def run(self, params: Mapping[str, Any], progress: Callable[[int, str], None] | None = None) -> dict[str, Any]:
+        secrets = [s for s in (params.get("connString"), params.get("jinaApiKey")) if isinstance(s, str) and s]
+        try:
+            return self._run(params, progress)
+        except ActionError:
+            raise
+        except DbConnectError as ex:
+            code = v11.ProcErrorCode.CONFIG_ERROR if ex.is_login_rejected else v11.ProcErrorCode.TRANSIENT_ERROR
+            raise ActionError(code, _scrub(str(ex), secrets), None if ex.is_login_rejected else DB_RETRY_AFTER_SEC) from None
+        except EmbeddingUnavailable as ex:
+            raise ActionError(v11.ProcErrorCode.TRANSIENT_ERROR, _scrub(str(ex), secrets), ex.retry_after or RUN_RETRY_AFTER_SEC) from None
+        except EmbeddingRejected as ex:
+            raise config_error(_scrub(str(ex), secrets)) from None
+        except Exception as ex:
+            log.exception("embed aborted")
+            raise ActionError(v11.ProcErrorCode.SYSTEM_ERROR, _scrub(f"embed aborted ({type(ex).__name__}): {ex}", secrets)) from None
+
+    def _run(self, params: Mapping[str, Any], progress: Callable[[int, str], None] | None) -> dict[str, Any]:
         dry_run = params.get("dryRun") is True
         if dry_run and not params.get("connString"):  # conformance at registration: nothing to read, nothing to call
             schema, name = _table_of(params)
@@ -178,3 +217,9 @@ def _table_of(params: Mapping[str, Any]) -> tuple[str, str]:
         return parse_table(table if isinstance(table, str) else "")
     except InvalidIdentifierError as ex:
         raise config_error(str(ex)) from None
+
+
+def _scrub(text: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    return text
