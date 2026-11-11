@@ -13,7 +13,7 @@ from dp_lex_embed.actions import ActionError, Actions
 pytestmark = pytest.mark.unit
 
 
-def _no_db(_: str) -> Any:
+def _no_db(*_: Any) -> Any:
     msg = "no database expected"
     raise AssertionError(msg)
 
@@ -60,3 +60,39 @@ def test_main_should_emit_one_error_line_for_a_bad_request_and_a_result_for_spec
     assert [e["type"] for e in events] == ["error", "result"]
     assert events[0]["code"] == "config_error"
     assert events[1]["data"]["protocol"] == "1.1"
+
+
+def test_should_report_exact_metric_keys_and_written_equal_embedded_when_run() -> None:
+    from builders import FakeEmbedder, FakeRepository, FakeRunOpener  # noqa: PLC0415
+
+    repo = FakeRepository({1: "aaaaaa", 2: "bbbbbb", 3: "  "})
+    actions = Actions(FakeRunOpener(repo), lambda _: FakeEmbedder(), None)
+    params = {"connString": "c", "jinaApiKey": "k", "table": "ds_x.notes", "keyColumn": "id", "textColumns": ["body"],
+              "vectorColumn": "embedding", "tokenBudget": 100, "batchSize": 2}
+
+    metrics = actions.run(params, None)["metrics"]
+
+    assert set(metrics) == {"pending", "embedded", "skipped", "embed_tokens", "written.ds_x.notes"}
+    assert metrics["embedded"] == 2
+    assert metrics["written.ds_x.notes"] == 2
+    assert metrics["pending"] == 3
+    assert metrics["skipped"] == 1
+    assert metrics["embed_tokens"] == 4
+
+
+def test_should_plan_without_embedding_when_dry_run_has_a_connection() -> None:
+    from builders import FakeEmbedder, FakeRepository, FakeRunOpener  # noqa: PLC0415
+
+    repo = FakeRepository({1: "aaaaaa", 2: "bbbbbb"})
+    embedder = FakeEmbedder()
+    actions = Actions(FakeRunOpener(repo), lambda _: embedder, None)
+    params = {"dryRun": True, "connString": "c", "table": "ds_x.notes", "keyColumn": "id", "textColumns": ["body"],
+              "vectorColumn": "embedding", "tokenBudget": 100}
+
+    metrics = actions.run(params, None)["metrics"]
+
+    assert metrics["pending"] == 2
+    assert metrics["embed_tokens"] == 4
+    assert metrics["embedded"] == 0
+    assert embedder.calls == []
+    assert repo.vectors == {}

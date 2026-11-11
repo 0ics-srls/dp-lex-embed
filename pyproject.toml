@@ -8,7 +8,7 @@ markers = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
+mypy_path = "src:tests"
 explicit_package_bases = true
 
 [tool.ruff]
