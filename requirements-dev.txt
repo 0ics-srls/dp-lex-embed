@@ -1,0 +1,9 @@
+# Dev/test deps: the production deps plus the test + type-check gate.
+-r requirements.txt
+pytest>=8.0
+pytest-mock>=3.14
+mypy>=1.11
+ruff
+testcontainers[postgres]>=4
+jsonschema>=4.20
+types-jsonschema

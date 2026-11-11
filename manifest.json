@@ -1,0 +1,62 @@
+{
+  "specVersion": "1.1",
+  "type": "stdin",
+  "name": "dp-lex-embed",
+  "version": "0.1.0",
+  "description": "Embeds the rows of a dataset table whose vector column is NULL with Jina jina-embeddings-v3 (Passage purpose, 1024 dims), with a hard tokenBudget and a dryRun plan (Proc-protocol v1.1).",
+  "author": "open-lex-it",
+  "authentication": false,
+  "actions": {
+    "execute": {
+      "description": "Legacy launch path; same as run.",
+      "input": { "type": "object", "properties": {} }
+    },
+    "spec": {
+      "description": "Reports the config schema, the output schema and the protocol version.",
+      "input": { "type": "object", "properties": {} }
+    },
+    "check": {
+      "description": "Validates the connection, the table and its columns without writing and without calling Jina.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "connString": { "type": "string", "description": "Dataset connection string (${dataset.connString}, rw role)." },
+          "table": { "type": "string", "description": "schema.table to embed." },
+          "keyColumn": { "type": "string" },
+          "textColumns": { "type": "array", "items": { "type": "string" } },
+          "vectorColumn": { "type": "string" },
+          "dryRun": { "type": "boolean", "default": false }
+        },
+        "required": ["connString", "table", "keyColumn", "textColumns", "vectorColumn"]
+      }
+    },
+    "run": {
+      "description": "Embeds the pending rows (vector IS NULL) of the table up to the tokenBudget.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "connString": { "type": "string", "description": "Dataset connection string (${dataset.connString}, rw role)." },
+          "table": { "type": "string", "description": "schema.table to embed." },
+          "keyColumn": { "type": "string", "description": "Unique key column used to address the rows." },
+          "textColumns": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Text columns joined by a newline." },
+          "vectorColumn": { "type": "string", "description": "vector(1024) column to fill." },
+          "model": { "type": "string", "default": "jina-embeddings-v3" },
+          "tokenBudget": { "type": "integer", "minimum": 0, "description": "Hard stop of tokens for this Run." },
+          "batchSize": { "type": "integer", "minimum": 1, "maximum": 64, "default": 16 },
+          "jinaApiKey": { "type": "string", "description": "Jina API key (${secret.JINA_API_KEY})." },
+          "items": { "type": "array", "items": { "type": "object" }, "description": "Informational." },
+          "sourceId": { "type": "string" },
+          "batchId": { "type": "string" },
+          "packageVersion": { "type": "string" },
+          "dryRun": { "type": "boolean", "default": false, "description": "Counts pending rows and estimated tokens; no Jina call, no write; without connString nothing is read." }
+        },
+        "required": ["connString", "table", "keyColumn", "textColumns", "vectorColumn", "tokenBudget", "jinaApiKey"]
+      }
+    },
+    "terminate": {
+      "description": "Stop and clean up.",
+      "input": { "type": "object", "properties": {} }
+    }
+  },
+  "execution": { "timeout": 1800, "memoryLimit": "512Mi", "cpuLimit": "1.0" }
+}
